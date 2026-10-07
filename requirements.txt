@@ -1,0 +1,3 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx2>=2.13.1  # only for the automated tests (FastAPI TestClient)
