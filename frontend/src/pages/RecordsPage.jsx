@@ -2,9 +2,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { useAsync, useTitle } from "../hooks.js";
-import { EmptyCard, ErrorBox, Loading, Segmented } from "../components/common.jsx";
+import { EmptyCard, ErrorBox, Loading, Segmented } from "../components/ui.jsx";
 import LineChart from "../components/LineChart.jsx";
-import { num, workoutsLabel } from "../utils.js";
+import { num, workoutsLabel } from "../utils/format.js";
 
 const WEIGHTED_METRICS = [["best_1rm", "Розрахунковий 1RM"], ["max_weight_kg", "Макс. вага"], ["volume_kg", "Обʼєм"]];
 const BODYWEIGHT_METRICS = [["max_reps", "Макс. повторень"]];
@@ -18,8 +18,8 @@ function Progress({ record }) {
   if (error) return <ErrorBox message={error} />;
   return (
     <div className="card">
-      <div className="page-head" style={{ marginBottom: ".4rem" }}>
-        <h2 style={{ margin: 0 }}>{record.exercise}</h2>
+      <div className="page-head tight">
+        <h2 className="flush">{record.exercise}</h2>
         <Segmented options={metrics} value={metric} onChange={setChoice} />
       </div>
       {loading || !data ? <Loading /> : <LineChart points={data.points} metric={metric} />}

@@ -234,3 +234,14 @@ dialog::backdrop { background: rgba(10, 12, 18, .5); -webkit-backdrop-filter: bl
 .vid-link { flex: 0 0 100%; text-decoration: none; }
 .vid-link:hover { text-decoration: underline; }
 .comments-inline { margin-top: .6rem; padding-top: .3rem; border-top: 1px solid var(--line); }
+
+/* Utilities replacing inline styles */
+.mt-xs { margin-top: .5rem; }
+.mt-sm { margin-top: .6rem; }
+.mt-md { margin-top: 1rem; }
+.mb-md { margin-bottom: 1rem; }
+.center { text-align: center; }
+.flush { margin: 0; }
+.page-head.tight { margin-bottom: .4rem; }
+.actions.center { justify-content: center; }
+.btn.block { width: 100%; justify-content: center; }

@@ -2,7 +2,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useTitle } from "../hooks.js";
-import { Logo, Segmented } from "../components/common.jsx";
+import { Logo, Segmented } from "../components/ui.jsx";
+
+const MODES = [["login", "Вхід"], ["register", "Реєстрація"]];
 
 export default function AuthPage() {
   useTitle("RepSquad — вхід");
@@ -27,8 +29,8 @@ export default function AuthPage() {
       <div className="logo"><Logo size={34} /><span>RepSquad</span></div>
       <p className="tagline">Соціальна мережа для спортсменів: тренуйтеся, діліться прогресом, питайте поради</p>
       <div className="card">
-        <div style={{ marginBottom: "1rem" }}>
-          <Segmented options={[["login", "Вхід"], ["register", "Реєстрація"]]} value={mode} onChange={(m) => { setMode(m); setError(""); }} />
+        <div className="mb-md">
+          <Segmented options={MODES} value={mode} onChange={(m) => { setMode(m); setError(""); }} />
         </div>
         <form onSubmit={submit} autoComplete="on" key={mode}>
           <label>Логін
@@ -42,13 +44,13 @@ export default function AuthPage() {
           <label>Пароль
             <input name="password" type="password" required minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="Щонайменше 8 символів" />
           </label>
-          <button className="btn primary" style={{ width: "100%", justifyContent: "center" }} type="submit">
+          <button className="btn primary block" type="submit">
             {mode === "login" ? "Увійти" : "Створити акаунт"}
           </button>
           <p className="form-error" role="alert">{error}</p>
         </form>
       </div>
-      <p className="muted small" style={{ textAlign: "center" }}>Демо-акаунт: <b>olena_fit</b> / <b>demo12345</b></p>
+      <p className="muted small center">Демо-акаунт: <b>olena_fit</b> / <b>demo12345</b></p>
     </div>
   );
 }
