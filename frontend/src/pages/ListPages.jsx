@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import { KIND_OPTIONS, PAGE_SIZE } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
-import { useTitle } from "../hooks.js";
-import { EmptyCard, KIND_OPTIONS, Segmented } from "../components/common.jsx";
+import { useRefresh, useTitle } from "../hooks.js";
+import { EmptyCard, Segmented } from "../components/ui.jsx";
 import Composer from "../components/Composer.jsx";
 import ItemList from "../components/ItemList.jsx";
-
-const PAGE = 10;
 
 const EMPTY_TEXT = {
   all: "Тут з'являться тренування й дописи.",
@@ -15,50 +14,62 @@ const EMPTY_TEXT = {
   posts: "Дописів поки немає.",
 };
 
-export function FeedPage() {
-  useTitle("Стрічка — RepSquad");
+/**
+ * Shared layout of the feed and discover pages: a title with the All/Workouts/Posts switch,
+ * optional content above the intro line, and a paged list from `endpoint`.
+ * `empty(kind)` renders the placeholder; `refreshKey` restarts the list from outside.
+ */
+function KindListPage({ title, intro, endpoint, empty, above = null, refreshKey = 0 }) {
+  useTitle(`${title} — RepSquad`);
   const [kind, setKind] = useState("all");
-  const [version, setVersion] = useState(0);
   return (
     <>
       <div className="page-head">
-        <h1>Стрічка</h1>
+        <h1>{title}</h1>
         <Segmented options={KIND_OPTIONS} value={kind} onChange={setKind} />
       </div>
-      <Composer onPosted={() => setVersion((v) => v + 1)} />
-      <p className="muted small">Публічні тренування й дописи тих, на кого ви підписані, та ваші власні дописи.</p>
+      {above}
+      <p className="muted small">{intro}</p>
       <ItemList
-        resetKey={`${kind}-${version}`}
-        fetchPage={(offset) => api("GET", `/api/feed?kind=${kind}&limit=${PAGE}&offset=${offset}`)}
-        empty={(
-          <EmptyCard title="Тут поки порожньо" text={`${EMPTY_TEXT[kind]} Підпишіться на спортсменів, щоб бачити їхні публікації.`}>
-            <Link className="btn primary" to="/search">Знайти людей</Link>
-            <Link className="btn" to="/discover">Переглянути огляд</Link>
-          </EmptyCard>
-        )}
+        resetKey={`${kind}-${refreshKey}`}
+        fetchPage={(offset) => api("GET", `${endpoint}?kind=${kind}&limit=${PAGE_SIZE}&offset=${offset}`)}
+        empty={empty(kind)}
       />
     </>
   );
 }
 
-export function DiscoverPage() {
-  useTitle("Огляд — RepSquad");
-  const [kind, setKind] = useState("all");
+export function FeedPage() {
+  const [version, refresh] = useRefresh();
   return (
-    <>
-      <div className="page-head">
-        <h1>Огляд</h1>
-        <Segmented options={KIND_OPTIONS} value={kind} onChange={setKind} />
-      </div>
-      <p className="muted small">Усі публічні тренування й дописи</p>
-      <ItemList
-        resetKey={kind}
-        fetchPage={(offset) => api("GET", `/api/discover?kind=${kind}&limit=${PAGE}&offset=${offset}`)}
-        empty={<EmptyCard title="Ще ніхто нічим не поділився" text="Зробіть тренування чи допис публічними — і вони зʼявляться тут." />}
-      />
-    </>
+    <KindListPage
+      title="Стрічка"
+      intro="Публічні тренування й дописи тих, на кого ви підписані, та ваші власні дописи."
+      endpoint="/api/feed"
+      refreshKey={version}
+      above={<Composer onPosted={refresh} />}
+      empty={(kind) => (
+        <EmptyCard title="Тут поки порожньо" text={`${EMPTY_TEXT[kind]} Підпишіться на спортсменів, щоб бачити їхні публікації.`}>
+          <Link className="btn primary" to="/search">Знайти людей</Link>
+          <Link className="btn" to="/discover">Переглянути огляд</Link>
+        </EmptyCard>
+      )}
+    />
   );
 }
+
+export function DiscoverPage() {
+  return (
+    <KindListPage
+      title="Огляд"
+      intro="Усі публічні тренування й дописи"
+      endpoint="/api/discover"
+      empty={() => <EmptyCard title="Ще ніхто нічим не поділився" text="Зробіть тренування чи допис публічними — і вони зʼявляться тут." />}
+    />
+  );
+}
+
+const VISIBILITY_FILTER = [["", "Усі"], ["public", "Публічні"], ["private", "Приватні"]];
 
 export function MinePage() {
   useTitle("Мої тренування — RepSquad");
@@ -69,12 +80,12 @@ export function MinePage() {
     <>
       <div className="page-head">
         <h1>Мої тренування</h1>
-        <Segmented options={[["", "Усі"], ["public", "Публічні"], ["private", "Приватні"]]} value={filter} onChange={setFilter} />
+        <Segmented options={VISIBILITY_FILTER} value={filter} onChange={setFilter} />
       </div>
       <p className="muted small">Приватні тренування бачите лише ви. Публічні — усі користувачі RepSquad.</p>
       <ItemList
         resetKey={filter}
-        fetchPage={(offset) => api("GET", `/api/users/${encodeURIComponent(me.username)}/workouts?limit=${PAGE}&offset=${offset}${query}`)}
+        fetchPage={(offset) => api("GET", `/api/users/${encodeURIComponent(me.username)}/workouts?limit=${PAGE_SIZE}&offset=${offset}${query}`)}
         empty={(
           <EmptyCard title="Тренувань не знайдено" text="Запишіть перше тренування.">
             <Link className="btn primary" to="/new">+ Нове тренування</Link>
