@@ -1,3 +1,4 @@
+import weakref
 from datetime import datetime
 
 from backend.services import RepSquad
@@ -13,7 +14,9 @@ class Clock:
 
 def make_app():
     clock = Clock()
-    return RepSquad(":memory:", clock=clock, pbkdf2_iterations=1000), clock
+    app = RepSquad(":memory:", clock=clock, pbkdf2_iterations=1000)
+    weakref.finalize(app, app.conn.close)  # closes the connection when the app is collected or at exit
+    return app, clock
 
 
 def workout(title="Ноги", visibility="private", exercises=None, date="2026-06-15"):

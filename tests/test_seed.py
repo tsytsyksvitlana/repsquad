@@ -17,7 +17,9 @@ class SeedTests(unittest.TestCase):
     def run_seed(self):
         with contextlib.redirect_stdout(io.StringIO()):
             seed.seed(self.path)
-        return RepSquad(self.path)
+        app = RepSquad(self.path)
+        self.addCleanup(app.close)
+        return app
 
     def test_posts_with_photos_are_created_once(self):
         app = self.run_seed()

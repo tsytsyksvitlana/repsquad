@@ -4,6 +4,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from backend import config
 from backend.services import RepSquad
 
 PASSWORD = "demo12345"
@@ -125,15 +126,18 @@ def seed_posts(app):
     return added
 
 
-def seed(db_path="repsquad.db"):
-    app = RepSquad(db_path)
-    if app._one("SELECT 1 FROM users WHERE username = ?", (USERS[0][0],)):
-        print("Демо-дані вже завантажено.")
-    else:
-        seed_core(app)
-    added = seed_posts(app)
-    if added:
-        print(f"Додано демо-дописів: {added}.")
+def seed(db_path=None):
+    app = RepSquad(db_path or config.db_path())
+    try:
+        if app._one("SELECT 1 FROM users WHERE username = ?", (USERS[0][0],)):
+            print("Демо-дані вже завантажено.")
+        else:
+            seed_core(app)
+        added = seed_posts(app)
+        if added:
+            print(f"Додано демо-дописів: {added}.")
+    finally:
+        app.close()
 
 
 def seed_core(app):
@@ -161,4 +165,4 @@ def seed_core(app):
 
 
 if __name__ == "__main__":
-    seed(sys.argv[1] if len(sys.argv) > 1 else "repsquad.db")
+    seed(sys.argv[1] if len(sys.argv) > 1 else None)
