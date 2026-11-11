@@ -1,12 +1,12 @@
 """AI trainer: builds a workout draft with Google Gemini (standard library only)."""
 import difflib
 import json
-import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import config
 from .errors import AppError, ValidationError
 
 MAX_PROMPT = 500
@@ -24,9 +24,6 @@ SYSTEM = (
 class AiUnavailable(AppError):
     status = 503
 
-
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-GEMINI_MODELS = ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")  # primary model + fallbacks
 
 # Response structure that Gemini is forced to follow (structured output)
 GEMINI_SCHEMA = {
@@ -46,12 +43,12 @@ GEMINI_SCHEMA = {
 
 
 def _gemini_key():
-    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+    return config.gemini_key()
 
 
 def _gemini_models():
     """The model from GEMINI_MODEL, or the default list: the next one is tried when a model is overloaded."""
-    return [os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL") else list(GEMINI_MODELS)
+    return config.gemini_models()
 
 
 def active_model():
@@ -65,10 +62,10 @@ class _Retryable(AiUnavailable):
 
 def _gemini_request(model, payload):
     req = urllib.request.Request(
-        f"{GEMINI_URL}/{urllib.parse.quote(model)}:generateContent", data=json.dumps(payload).encode("utf-8"),
+        f"{config.GEMINI_URL}/{urllib.parse.quote(model)}:generateContent", data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "x-goog-api-key": _gemini_key()})
     try:
-        with urllib.request.urlopen(req, timeout=40) as resp:
+        with urllib.request.urlopen(req, timeout=config.GEMINI_TIMEOUT) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as e:
         if e.code == 429:
