@@ -1,4 +1,4 @@
-import { fmtDay, fmtShortDay, num } from "../utils.js";
+import { fmtDay, fmtShortDay, num } from "../utils/format.js";
 
 const LABELS = { best_1rm: "1RM, кг", max_weight_kg: "кг", volume_kg: "кг", max_reps: "повт." };
 

@@ -1,26 +1,20 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { api } from "../api.js";
 import { useToast } from "../context/ToastContext.jsx";
-import { fitImage } from "../utils.js";
-import { Segmented } from "./common.jsx";
+import { fitImage } from "../utils/image.js";
+import PickImageButton from "./PickImageButton.jsx";
+import { Segmented } from "./ui.jsx";
+
+const VISIBILITY_OPTIONS = [["public", "Публічний"], ["private", "Приватний"]];
 
 /** Form for writing a post (text and/or one picture). `onPosted` lets the parent refresh its list. */
 export default function Composer({ onPosted }) {
   const toast = useToast();
-  const fileInput = useRef(null);
   const [body, setBody] = useState("");
   const [visibility, setVisibility] = useState("public");
   const [image, setImage] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  const pick = async (e) => {
-    const file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    try { setImage(await fitImage(file)); }
-    catch { toast("Не вдалося прочитати зображення", "err"); }
-  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -45,10 +39,9 @@ export default function Composer({ onPosted }) {
           <button className="icon-btn" type="button" aria-label="Прибрати фото" title="Прибрати фото" onClick={() => setImage(null)}>×</button>
         </div>
       )}
-      <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={pick} />
       <div className="actions">
-        <button className="btn small" type="button" onClick={() => fileInput.current.click()}>{image ? "Змінити фото" : "Додати фото"}</button>
-        <Segmented options={[["public", "Публічний"], ["private", "Приватний"]]} value={visibility} onChange={setVisibility} />
+        <PickImageButton convert={fitImage} onPicked={setImage}>{image ? "Змінити фото" : "Додати фото"}</PickImageButton>
+        <Segmented options={VISIBILITY_OPTIONS} value={visibility} onChange={setVisibility} />
         <span className="grow" />
         <button className="btn primary" type="submit" disabled={busy || (!body.trim() && !image)}>Опублікувати</button>
       </div>

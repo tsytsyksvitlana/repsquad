@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useToast } from "../context/ToastContext.jsx";
-import { ErrorBox, Loading } from "./common.jsx";
+import { useAction, useRefresh } from "../hooks.js";
+import { ErrorBox, Loading } from "./ui.jsx";
 import { PostCard } from "./PostCard.jsx";
 import { WorkoutCard } from "./WorkoutCard.jsx";
 
@@ -9,9 +9,9 @@ import { WorkoutCard } from "./WorkoutCard.jsx";
  * The list restarts when `resetKey` changes or when a card reports a change (then `onItemsChanged` is called too).
  */
 export default function ItemList({ fetchPage, empty, resetKey, onItemsChanged }) {
-  const toast = useToast();
+  const run = useAction();
   const [state, setState] = useState({ items: [], hasMore: false, loading: true, error: null });
-  const [version, setVersion] = useState(0);
+  const [version, refresh] = useRefresh();
 
   useEffect(() => {
     let cancelled = false;
@@ -23,14 +23,12 @@ export default function ItemList({ fetchPage, empty, resetKey, onItemsChanged })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey, version]);
 
-  const loadMore = useCallback(async () => {
-    try {
-      const page = await fetchPage(state.items.length);
-      setState((s) => ({ ...s, items: [...s.items, ...page.items], hasMore: page.has_more }));
-    } catch (e) { toast(e.message, "err"); }
-  }, [fetchPage, state.items.length, toast]);
+  const loadMore = useCallback(() => run(async () => {
+    const page = await fetchPage(state.items.length);
+    setState((s) => ({ ...s, items: [...s.items, ...page.items], hasMore: page.has_more }));
+  }), [fetchPage, state.items.length, run]);
 
-  const changed = () => { setVersion((v) => v + 1); if (onItemsChanged) onItemsChanged(); };
+  const changed = () => { refresh(); if (onItemsChanged) onItemsChanged(); };
 
   if (state.loading) return <Loading />;
   if (state.error) return <ErrorBox message={state.error} />;

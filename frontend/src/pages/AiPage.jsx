@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api.js";
 import { useDraft } from "../context/DraftContext.jsx";
 import { useTitle } from "../hooks.js";
-import { VideoSlot } from "../components/common.jsx";
-import { setsLine } from "../utils.js";
+import VideoSlot from "../components/VideoSlot.jsx";
+import { setsLine } from "../utils/format.js";
 
 const IDEAS = [
   "Тренування на все тіло для початківця, 45 хвилин",
