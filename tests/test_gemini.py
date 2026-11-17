@@ -6,6 +6,7 @@ import urllib.error
 from unittest import mock
 
 from backend import ai
+from tests.helpers import patch_env
 
 MSGS = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "USR"}]
 
@@ -28,9 +29,7 @@ def http_error(code, body=None):
 
 class GeminiTests(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(os.environ, {"GEMINI_API_KEY": "SECRET-KEY", "GEMINI_MODEL": ""})
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        patch_env(self, GEMINI_API_KEY="SECRET-KEY", GEMINI_MODEL="")
 
     def test_request_shape_and_key_only_in_header(self):
         out = {"candidates": [{"content": {"parts": [{"text": '{"exercises": []}'}]}}]}
@@ -45,20 +44,25 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(body["contents"], [{"role": "user", "parts": [{"text": "USR"}]}])
         self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
 
-    def test_missing_key_gives_setup_hint(self):
+    def test_active_model_display_name(self):
         self.assertTrue(ai.active_model().startswith("Gemini"))
+
+    def test_missing_key_gives_setup_hint(self):
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}):
             with self.assertRaises(ai.AiUnavailable) as cm:
                 ai.default_chat(MSGS)
         self.assertIn("GEMINI_API_KEY", cm.exception.message)
 
-    def test_errors_are_friendly_and_do_not_leak_key(self):
-        for code, text in ((429, "ліміт"), (403, "GEMINI_API_KEY"), (500, "перевантажений")):
-            with mock.patch("urllib.request.urlopen", side_effect=http_error(code)):
-                with self.assertRaises(ai.AiUnavailable) as cm:
-                    ai.gemini_chat(MSGS)
-            self.assertIn(text, cm.exception.message)
-            self.assertNotIn("SECRET-KEY", cm.exception.message)
+    def test_http_errors_are_friendly_and_do_not_leak_key(self):
+        for code, expected in ((429, "ліміт"), (403, "GEMINI_API_KEY"), (500, "перевантажений")):
+            with self.subTest(code=code):
+                with mock.patch("urllib.request.urlopen", side_effect=http_error(code)):
+                    with self.assertRaises(ai.AiUnavailable) as cm:
+                        ai.gemini_chat(MSGS)
+                self.assertIn(expected, cm.exception.message)
+                self.assertNotIn("SECRET-KEY", cm.exception.message)
+
+    def test_network_error_raises_ai_unavailable(self):
         with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
             with self.assertRaises(ai.AiUnavailable):
                 ai.gemini_chat(MSGS)

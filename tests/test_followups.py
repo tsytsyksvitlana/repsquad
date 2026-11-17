@@ -1,4 +1,3 @@
-import base64
 import logging
 import unittest
 from datetime import timedelta
@@ -7,18 +6,17 @@ from unittest import mock
 from backend import server
 from backend.errors import Unauthorized
 from backend.services import SESSION_TTL
-from tests.helpers import make_app, workout
-
-JPEG = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 20).decode()
+from tests.helpers import DEFAULT_PASSWORD, ServiceTestCase, count_rows, make_data_url, trace_select_queries, workout
 
 
-class SearchUsersTests(unittest.TestCase):
+class SearchUsersTests(ServiceTestCase):
     def setUp(self):
-        self.app, _ = make_app()
-        self.ids = {n: self.app.register(n, "secret123")[0]["id"] for n in ("anna", "andy", "anton", "bob")}
+        super().setUp()
+        self.ids = {n: self.register_user(n)[0]["id"] for n in ("anna", "andy", "anton", "bob")}
         app = self.app
-        app.set_avatar(self.ids["anna"], JPEG)
-        app.set_avatar(self.ids["anna"], JPEG)  # version 2
+        avatar = make_data_url()
+        app.set_avatar(self.ids["anna"], avatar)
+        app.set_avatar(self.ids["anna"], avatar)  # version 2
         app.follow(self.ids["bob"], "anna")
         app.follow(self.ids["anton"], "anna")
         app.follow(self.ids["anna"], "andy")
@@ -48,53 +46,46 @@ class SearchUsersTests(unittest.TestCase):
 
     def test_number_of_queries_does_not_depend_on_result_size(self):
         def selects(q):
-            seen = []
-            self.app.conn.set_trace_callback(lambda sql: seen.append(sql) if sql.lstrip().startswith("SELECT") else None)
-            try:
+            with trace_select_queries(self.app) as seen:
                 self.app.search_users(q, self.ids["bob"])
-            finally:
-                self.app.conn.set_trace_callback(None)
             return len(seen)
 
         self.assertEqual(selects("anna"), selects(""))  # 1 user vs 4 users
         self.assertLessEqual(selects(""), 7)
 
 
-class SessionCleanupTests(unittest.TestCase):
+class SessionCleanupTests(ServiceTestCase):
     def setUp(self):
-        self.app, self.clock = make_app()
-        self.app.register("alice", "secret123")
-
-    def sessions(self):
-        return self.app._one("SELECT COUNT(*) AS n FROM sessions")["n"]
+        super().setUp()
+        self.register_user("alice")
 
     def test_expired_token_is_deleted_on_authenticate(self):
-        token = self.app.login("alice", "secret123")[1]
-        self.assertEqual(self.sessions(), 2)  # register + login
+        token = self.app.login("alice", DEFAULT_PASSWORD)[1]
+        self.assertEqual(count_rows(self.app, "sessions"), 2)  # register + login
         self.clock.now += SESSION_TTL + timedelta(seconds=1)
         with self.assertRaises(Unauthorized) as cm:
             self.app.authenticate(token)
         self.assertEqual(cm.exception.message, "Сесія недійсна або завершилась")
-        self.assertEqual(self.sessions(), 1)
+        self.assertEqual(count_rows(self.app, "sessions"), 1)
         with self.assertRaises(Unauthorized):  # row is gone: same error as for an unknown token
             self.app.authenticate(token)
 
     def test_valid_token_is_kept(self):
-        token = self.app.login("alice", "secret123")[1]
+        token = self.app.login("alice", DEFAULT_PASSWORD)[1]
         self.clock.now += SESSION_TTL
         self.assertIsNotNone(self.app.authenticate(token))
-        self.assertEqual(self.sessions(), 2)
+        self.assertEqual(count_rows(self.app, "sessions"), 2)
 
     def test_new_session_purges_expired_ones_only(self):
         self.clock.now += SESSION_TTL - timedelta(days=1)
-        fresh = self.app.login("alice", "secret123")[1]
+        fresh = self.app.login("alice", DEFAULT_PASSWORD)[1]
         self.clock.now += timedelta(days=2)  # the register session is now expired, the login one is not
-        self.app.register("bob", "secret123")
-        self.assertEqual(self.sessions(), 2)  # login (alice) + register (bob)
+        self.register_user("bob")
+        self.assertEqual(count_rows(self.app, "sessions"), 2)  # login (alice) + register (bob)
         self.assertIsNotNone(self.app.authenticate(fresh))
         self.clock.now += SESSION_TTL + timedelta(days=1)
-        self.app.login("alice", "secret123")
-        self.assertEqual(self.sessions(), 1)
+        self.app.login("alice", DEFAULT_PASSWORD)
+        self.assertEqual(count_rows(self.app, "sessions"), 1)
 
 
 class ServeLoggingTests(unittest.TestCase):
