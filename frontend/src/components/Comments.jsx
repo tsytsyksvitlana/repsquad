@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
-import { useToast } from "../context/ToastContext.jsx";
-import { fmtDT } from "../utils.js";
-import { Avatar } from "./common.jsx";
+import { useAction } from "../hooks.js";
+import { fmtDT } from "../utils/format.js";
+import Avatar from "./Avatar.jsx";
 
 /**
  * Comment list with a form, shared by workouts and posts.
@@ -11,7 +11,7 @@ import { Avatar } from "./common.jsx";
  * `onCount` reports the new number of comments so a parent can keep its counter in sync.
  */
 export default function Comments({ initial, addPath, deletePath, onCount, compact = false }) {
-  const toast = useToast();
+  const run = useAction();
   const [comments, setComments] = useState(initial);
   const [error, setError] = useState("");
   const [body, setBody] = useState("");
@@ -25,10 +25,7 @@ export default function Comments({ initial, addPath, deletePath, onCount, compac
       setBody("");
     } catch (ex) { setError(ex.message); }
   };
-  const remove = async (id) => {
-    try { update((await api("DELETE", deletePath(id))).comments); }
-    catch (ex) { toast(ex.message, "err"); }
-  };
+  const remove = (id) => run(async () => update((await api("DELETE", deletePath(id))).comments));
 
   return (
     <div className={compact ? "comments-inline" : "card"}>
@@ -36,7 +33,7 @@ export default function Comments({ initial, addPath, deletePath, onCount, compac
       <div>
         {comments.length ? comments.map((c) => (
           <div className="comment" key={c.id}>
-            <Avatar username={c.author.username} name={c.author.display_name} src={c.author.avatar_url} size="sm" />
+            <Avatar user={c.author} size="sm" />
             <div className="body">
               <div className="meta"><Link to={`/u/${c.author.username}`}><b>{c.author.display_name}</b></Link> · {fmtDT(c.created_at)}</div>
               {c.body}
@@ -45,7 +42,7 @@ export default function Comments({ initial, addPath, deletePath, onCount, compac
           </div>
         )) : <p className="muted">Поки немає коментарів. Будьте першим!</p>}
       </div>
-      <form className="inline" style={{ marginTop: ".6rem" }} onSubmit={add}>
+      <form className="inline mt-sm" onSubmit={add}>
         <input required maxLength={500} placeholder="Напишіть коментар або пораду…" aria-label="Коментар" value={body} onChange={(e) => setBody(e.target.value)} />
         <button className="btn primary" type="submit">Надіслати</button>
       </form>

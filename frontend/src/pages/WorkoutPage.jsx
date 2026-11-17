@@ -1,17 +1,20 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
-import { useToast } from "../context/ToastContext.jsx";
-import { useAsync, useTitle } from "../hooks.js";
-import { Avatar, ErrorBox, Loading, VideoSlot, VisibilityBadge } from "../components/common.jsx";
+import { useAsync, useRefresh, useTitle } from "../hooks.js";
+import { ErrorBox, Loading } from "../components/ui.jsx";
+import AuthorHeader from "../components/AuthorHeader.jsx";
 import Comments from "../components/Comments.jsx";
-import { LikeButton, OwnerActions, WorkoutStats } from "../components/WorkoutCard.jsx";
-import { fmtDay, fmtDT, num } from "../utils.js";
+import LikeButton from "../components/LikeButton.jsx";
+import OwnerActions from "../components/OwnerActions.jsx";
+import VideoSlot from "../components/VideoSlot.jsx";
+import { WorkoutStats } from "../components/WorkoutCard.jsx";
+import { fmtDay, num } from "../utils/format.js";
 
 export default function WorkoutPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [version, setVersion] = useState(0);
+  const [version, refresh] = useRefresh();
   const { data: w, error, loading } = useAsync(() => api("GET", `/api/workouts/${id}`), [id, version]);
   useTitle(w ? `${w.title} — RepSquad` : "Тренування — RepSquad");
 
@@ -23,14 +26,7 @@ export default function WorkoutPage() {
   return (
     <>
       <article className="card workout">
-        <header>
-          <Avatar username={w.author.username} name={w.author.display_name} src={w.author.avatar_url} />
-          <div className="who">
-            <Link to={`/u/${w.author.username}`}>{w.author.display_name}</Link><br />
-            <span className="muted small">@{w.author.username} · {fmtDay(w.date)}</span>
-          </div>
-          <VisibilityBadge visibility={w.visibility} />
-        </header>
+        <AuthorHeader author={w.author} when={fmtDay(w.date)} visibility={w.visibility} />
         <h1>{w.title}</h1>
         {w.exercises.map((e, i) => (
           <div key={i}>
@@ -48,9 +44,9 @@ export default function WorkoutPage() {
         ))}
         {w.notes && <p><b>Нотатки:</b> {w.notes}</p>}
         <footer>
-          <LikeButton workout={w} />
+          <LikeButton kind="workout" item={w} />
           <WorkoutStats workout={w} />
-          {w.is_mine && <OwnerActions workout={w} onChanged={() => setVersion((v) => v + 1)} afterDelete={() => navigate("/mine")} />}
+          {w.is_mine && <OwnerActions kind="workout" item={w} onChanged={refresh} afterDelete={() => navigate("/mine")} />}
         </footer>
       </article>
       <Comments key={w.id} initial={w.comments} addPath={`/api/workouts/${w.id}/comments`} deletePath={(cid) => `/api/comments/${cid}`} />

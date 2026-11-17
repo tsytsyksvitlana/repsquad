@@ -1,6 +1,7 @@
 import { Link, NavLink } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { Avatar, Logo } from "./common.jsx";
+import Avatar from "./Avatar.jsx";
+import { Logo } from "./ui.jsx";
 
 const NAV = [
   ["feed", "Стрічка"], ["discover", "Огляд"], ["search", "Люди"], ["new", "Нове тренування"],
@@ -17,7 +18,7 @@ export default function Topbar() {
       </nav>
       <div className="me">
         <Link className="userlink" to={`/u/${me.username}`}>
-          <Avatar username={me.username} name={me.display_name} src={me.avatar_url} size="sm" /><span>{me.username}</span>
+          <Avatar user={me} size="sm" /><span>{me.username}</span>
         </Link>
         <button className="btn small ghost" type="button" onClick={logout}>Вийти</button>
       </div>

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { TOAST_MS } from "../config.js";
 
 const ToastContext = createContext(null);
 
@@ -10,7 +11,7 @@ export function ToastProvider({ children }) {
   const toast = useCallback((message, kind = "ok") => {
     const id = nextId.current++;
     setToasts((list) => [...list, { id, message, kind }]);
-    setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), kind === "ok" ? 3200 : 6000);
+    setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), TOAST_MS[kind] ?? TOAST_MS.err);
   }, []);
 
   const value = useMemo(() => toast, [toast]);

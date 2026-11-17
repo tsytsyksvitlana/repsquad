@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./context/AuthContext.jsx";
 import Topbar from "./components/Topbar.jsx";
-import { Loading } from "./components/common.jsx";
+import { Loading } from "./components/ui.jsx";
 import AuthPage from "./pages/AuthPage.jsx";
 import { DiscoverPage, FeedPage, MinePage } from "./pages/ListPages.jsx";
 import PeoplePage from "./pages/PeoplePage.jsx";
