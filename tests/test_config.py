@@ -1,20 +1,16 @@
 import os
 import unittest
 from datetime import timedelta
-from unittest import mock
 
 from backend import ai, config
+from tests.helpers import patch_env
 
 ENV_KEYS = ("REPSQUAD_DB", "REPSQUAD_HOST", "REPSQUAD_PORT", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL")
 
 
 class ConfigTests(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(os.environ)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        for key in ENV_KEYS:
-            os.environ.pop(key, None)
+        patch_env(self, clear_keys=ENV_KEYS)
 
     def test_defaults_match_the_original_values(self):
         self.assertEqual(config.db_path(), "repsquad.db")

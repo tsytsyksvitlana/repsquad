@@ -2,21 +2,21 @@ import unittest
 
 from backend.errors import NotFound, ValidationError
 from backend.services import est_1rm
-from tests.helpers import lift, make_app, workout
+from tests.helpers import ServiceTestCase, lift, workout
 
 
 class Estimate1RM(unittest.TestCase):
     def test_formula(self):
-        self.assertEqual(est_1rm(100, 1), 100.0)
-        self.assertEqual(est_1rm(100, 5), 116.7)
-        self.assertEqual(est_1rm(60, 10), 80.0)
-        self.assertEqual(est_1rm(0, 20), 0.0)
+        cases = ((100, 1, 100.0), (100, 5, 116.7), (60, 10, 80.0), (0, 20, 0.0))
+        for weight, reps, expected in cases:
+            with self.subTest(weight=weight, reps=reps):
+                self.assertEqual(est_1rm(weight, reps), expected)
 
 
-class StatsTests(unittest.TestCase):
+class StatsTests(ServiceTestCase):
     def setUp(self):
-        self.app, _ = make_app()
-        self.user, _t = self.app.register("alice", "secret123")
+        super().setUp()
+        self.user, _ = self.register_user("alice")
         self.uid = self.user["id"]
 
     def add(self, date, *exercises, vis="private"):
@@ -29,8 +29,8 @@ class StatsTests(unittest.TestCase):
         bench = recs["Жим лежачи"]
         self.assertEqual((bench["max_weight_kg"], bench["max_weight_reps"], bench["max_weight_date"]),
                          (90.0, 3, "2026-06-01"))
-        self.assertEqual(bench["best_1rm"], 99.2)       # best 1RM: 85*(1+5/30)
-        self.assertEqual(bench["workouts"], 2)          # the exercise name is case-insensitive
+        self.assertEqual(bench["best_1rm"], 99.2)  # best 1RM: 85*(1+5/30)
+        self.assertEqual(bench["workouts"], 2)  # exercise name is case-insensitive
         pull = recs["Підтягування"]
         self.assertTrue(pull["bodyweight"])
         self.assertEqual(pull["max_reps"], 12)
@@ -56,7 +56,7 @@ class StatsTests(unittest.TestCase):
 
     def test_stats_include_private_workouts_of_owner_only(self):
         self.add("2026-06-01", lift("Жим", (5, 100)), vis="private")
-        bob, _t = self.app.register("bob", "secret123")
+        bob, _ = self.register_user("bob")
         self.assertEqual(self.app.records(bob["id"]), [])
         with self.assertRaises(NotFound):
             self.app.progress(bob["id"], "Жим")

@@ -1,18 +1,19 @@
+import sqlite3
 import unittest
 
 from backend.db import connect
 from backend.errors import Forbidden, NotFound
-from tests.helpers import make_app, workout
+from tests.helpers import ServiceTestCase, make_app, query_one, workout
 
 
-class SharedHelperTests(unittest.TestCase):
+class SharedHelperTests(ServiceTestCase):
     """Workouts and posts share one implementation of likes, comments, visibility and ownership."""
 
     def setUp(self):
-        self.app, _ = make_app()
-        self.alice = self.app.register("alice", "secret123")[0]["id"]
-        self.bob = self.app.register("bob", "secret123")[0]["id"]
-        self.carol = self.app.register("carol", "secret123")[0]["id"]
+        super().setUp()
+        self.alice = self.register_user("alice")[0]["id"]
+        self.bob = self.register_user("bob")[0]["id"]
+        self.carol = self.register_user("carol")[0]["id"]
         app = self.app
         wid = app.create_workout(self.alice, workout(visibility="public"))[0]["id"]
         pid = app.create_post(self.alice, {"body": "hello", "visibility": "public"})["id"]
@@ -40,7 +41,7 @@ class SharedHelperTests(unittest.TestCase):
             self.assertEqual([c["body"] for c in comments], ["nice"])
             self.assertTrue(comments[0]["can_delete"])
             cid = comments[0]["id"]
-            self.assertTrue(k["get"](k["id"], self.alice)["comments"][0]["can_delete"])  # the owner may delete
+            self.assertTrue(k["get"](k["id"], self.alice)["comments"][0]["can_delete"])  # owner may delete
             self.assertFalse(k["get"](k["id"], self.carol)["comments"][0]["can_delete"])
             with self.assertRaises(Forbidden):
                 k["delete"](cid, self.carol)
@@ -84,8 +85,8 @@ class LifecycleTests(unittest.TestCase):
         app, _ = make_app()
         app.close()
         app.close()
-        with self.assertRaises(Exception):
-            app._one("SELECT 1")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            query_one(app, "SELECT 1")
 
     def test_foreign_keys_stay_enabled(self):
         conn = connect()
