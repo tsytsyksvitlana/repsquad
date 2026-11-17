@@ -3,6 +3,7 @@ import os
 import sys
 from pathlib import Path
 
+from backend import config
 from backend.server import serve
 
 
@@ -16,10 +17,21 @@ def load_env(path=Path(__file__).parent / ".env"):
                 os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+def parse_port(args):
+    """Port from the first positional argument; exits with a clear message when it is not a number."""
+    if not args:
+        return None  # serve() falls back to config
+    try:
+        return int(args[0])
+    except ValueError:
+        sys.exit(f"Invalid port {args[0]!r}: expected a number, e.g. python3 run.py 8000")
+
+
 if __name__ == "__main__":
     load_env()
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    port = parse_port(args)
     if "--seed" in sys.argv:
         from seed import seed
-        seed("repsquad.db")
-    serve(port=int(args[0]) if args else 8000)
+        seed(config.db_path())
+    serve(port=port)

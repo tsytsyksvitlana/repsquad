@@ -4,15 +4,17 @@ import hashlib
 import hmac
 import secrets
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import NamedTuple
 
+from . import config
 from . import validation as v
 from .db import connect
 from .errors import Conflict, Forbidden, NotFound, Unauthorized, ValidationError
 from .privacy import VISIBLE_SQL, can_view
 
-SESSION_TTL = timedelta(days=30)
-PAGE_MAX = 50
+SESSION_TTL = config.SESSION_TTL
+PAGE_MAX = config.PAGE_MAX
 KINDS = ("all", "workouts", "posts")
 
 EXERCISE_CATALOG = [
@@ -29,6 +31,18 @@ def est_1rm(weight, reps):
     if weight <= 0:
         return 0.0
     return round(weight if reps == 1 else weight * (1 + reps / 30), 1)
+
+
+class _Kind(NamedTuple):
+    """Table and message names of one reactable item type (workout or post), so likes, comments, visibility and
+    ownership checks are written once. Values are internal constants, never user input."""
+    base: str             # SELECT that yields the item row with its author, aliased "w"
+    likes: str            # likes table
+    comments: str         # comments table
+    fk: str               # column of the likes/comments tables that points at the item
+    missing: str          # NotFound message
+    foreign: str          # Forbidden message when editing someone else's item
+    comment_foreign: str  # Forbidden message when deleting someone else's comment
 
 
 def locked(fn):
@@ -49,11 +63,16 @@ def _limit_offset(limit, offset):
 
 
 class RepSquad:
-    def __init__(self, path=":memory:", *, clock=None, pbkdf2_iterations=200_000):
+    def __init__(self, path=":memory:", *, clock=None, pbkdf2_iterations=config.PBKDF2_ITERATIONS):
         self.conn = connect(path)
         self.lock = threading.RLock()
         self.clock = clock or datetime.now
         self.iterations = pbkdf2_iterations
+
+    def close(self):
+        """Closes the database connection; safe to call more than once."""
+        with self.lock:
+            self.conn.close()
 
     # ---------- helpers ----------
     def now(self):
@@ -72,8 +91,71 @@ class RepSquad:
     def _all(self, sql, params=()):
         return self.conn.execute(sql, params).fetchall()
 
+    def _count(self, table, column, value):
+        return self._one(f"SELECT COUNT(*) AS n FROM {table} WHERE {column} = ?", (value,))["n"]
+
+    def _update_row(self, table, row_id, fields):
+        """UPDATE of the given columns (names come from validated code, never from the client)."""
+        if fields:
+            sets = ", ".join(f"{k} = :{k}" for k in fields)
+            with self.conn:
+                self.conn.execute(f"UPDATE {table} SET {sets} WHERE id = :id", {**fields, "id": row_id})
+
+    def _visible(self, kind, item_id, viewer_id):
+        """The item row if the viewer may see it; otherwise NotFound (existence is not revealed)."""
+        row = self._one(kind.base + " WHERE w.id = ?", (item_id,))
+        if not row or not can_view(row["user_id"], row["visibility"], viewer_id):
+            raise NotFound(kind.missing)
+        return row
+
+    def _owned(self, kind, item_id, user_id):
+        row = self._visible(kind, item_id, user_id)
+        if row["user_id"] != user_id:
+            raise Forbidden(kind.foreign)
+        return row
+
+    def _toggle_like(self, kind, item_id, user_id):
+        self._visible(kind, item_id, user_id)
+        with self.conn:
+            deleted = self.conn.execute(f"DELETE FROM {kind.likes} WHERE user_id = ? AND {kind.fk} = ?",
+                                        (user_id, item_id)).rowcount
+            if not deleted:
+                self.conn.execute(f"INSERT INTO {kind.likes}(user_id, {kind.fk}) VALUES (?,?)", (user_id, item_id))
+        return {"liked": not deleted, "likes": self._count(kind.likes, kind.fk, item_id)}
+
+    def _comment_list(self, kind, item_id, viewer_id, owner_id):
+        rows = self._all(
+            "SELECT c.id, c.user_id, c.body, c.created_at, u.username, u.display_name, "
+            f"(SELECT version FROM user_avatars a WHERE a.user_id = u.id) AS avatar_v FROM {kind.comments} c "
+            f"JOIN users u ON u.id = c.user_id WHERE c.{kind.fk} = ? ORDER BY c.id", (item_id,))
+        return [{"id": r["id"], "body": r["body"], "created_at": r["created_at"],
+                 "author": {"username": r["username"], "display_name": r["display_name"],
+                            "avatar_url": self._avatar_url(r["username"], r["avatar_v"])},
+                 "can_delete": viewer_id in (r["user_id"], owner_id)} for r in rows]
+
+    def _add_comment(self, kind, item_id, user_id, body):
+        row = self._visible(kind, item_id, user_id)
+        body = v.clean_text(body, "Коментар", max_len=v.MAX_COMMENT, required=True)
+        with self.conn:
+            self.conn.execute(f"INSERT INTO {kind.comments}({kind.fk}, user_id, body, created_at) VALUES (?,?,?,?)",
+                              (item_id, user_id, body, self.now().isoformat()))
+        return self._comment_list(kind, item_id, user_id, row["user_id"])
+
+    def _delete_comment(self, kind, comment_id, user_id):
+        c = self._one(f"SELECT id, user_id, {kind.fk} AS item_id FROM {kind.comments} WHERE id = ?", (comment_id,))
+        if not c:
+            raise NotFound("Коментар не знайдено")
+        row = self._visible(kind, c["item_id"], user_id)
+        if user_id not in (c["user_id"], row["user_id"]):
+            raise Forbidden(kind.comment_foreign)
+        with self.conn:
+            self.conn.execute(f"DELETE FROM {kind.comments} WHERE id = ?", (comment_id,))
+        return self._comment_list(kind, c["item_id"], user_id, row["user_id"])
+
     # ---------- REQ-1: accounts ----------
     def _new_session(self, user_id):
+        # every new session is a good moment to drop the ones that can no longer be used
+        self.conn.execute("DELETE FROM sessions WHERE created_at < ?", ((self.now() - SESSION_TTL).isoformat(),))
         token = secrets.token_urlsafe(32)
         self.conn.execute("INSERT INTO sessions(token_hash, user_id, created_at) VALUES (?,?,?)",
                           (self._token_hash(token), user_id, self.now().isoformat()))
@@ -116,7 +198,11 @@ class RepSquad:
         if not token:
             raise Unauthorized("Потрібна авторизація")
         row = self._one("SELECT user_id, created_at FROM sessions WHERE token_hash = ?", (self._token_hash(token),))
-        if not row or self.now() - datetime.fromisoformat(row["created_at"]) > SESSION_TTL:
+        if not row:
+            raise Unauthorized("Сесія недійсна або завершилась")
+        if self.now() - datetime.fromisoformat(row["created_at"]) > SESSION_TTL:
+            with self.conn:
+                self.conn.execute("DELETE FROM sessions WHERE token_hash = ?", (self._token_hash(token),))
             raise Unauthorized("Сесія недійсна або завершилась")
         return row["user_id"]
 
@@ -133,39 +219,57 @@ class RepSquad:
         return f"/api/users/{username}/avatar?v={version}" if version else None
 
     def _user_view(self, row, viewer_id):
-        uid = row["id"]
-        avatar = self._one("SELECT version FROM user_avatars WHERE user_id = ?", (uid,))
-        visible = self._one(
-            f"SELECT COUNT(*) AS n FROM workouts w WHERE w.user_id = :uid AND {VISIBLE_SQL}",
-            {"uid": uid, "viewer": viewer_id})["n"]
-        return {
-            "id": uid, "username": row["username"], "display_name": row["display_name"],
-            "sport": row["sport"], "level": row["level"], "goals": row["goals"], "bio": row["bio"],
-            "created_at": row["created_at"],
-            "avatar_url": self._avatar_url(row["username"], avatar["version"] if avatar else 0),
-            "followers": self._one("SELECT COUNT(*) AS n FROM follows WHERE followee_id = ?", (uid,))["n"],
-            "following": self._one("SELECT COUNT(*) AS n FROM follows WHERE follower_id = ?", (uid,))["n"],
-            "workouts": visible,
-            "posts": self._one(f"SELECT COUNT(*) AS n FROM posts w WHERE w.user_id = :uid AND {VISIBLE_SQL}",
-                               {"uid": uid, "viewer": viewer_id})["n"],
-            "is_me": uid == viewer_id,
-            "followed_by_me": bool(viewer_id and self._one(
-                "SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?", (viewer_id, uid))),
-        }
+        return self._user_views([row], viewer_id)[0]
+
+    def _user_views(self, rows, viewer_id):
+        """Profile views for several users in a fixed number of queries (5 plus the one that fetched the rows)."""
+        if not rows:
+            return []
+        ids = {f"u{i}": r["id"] for i, r in enumerate(rows)}
+        marks = ", ".join(f":{k}" for k in ids)
+        args = {**ids, "viewer": viewer_id}
+        avatars = {r["user_id"]: r["version"] for r in self._all(
+            f"SELECT user_id, version FROM user_avatars WHERE user_id IN ({marks})", ids)}
+        followers = {r["id"]: r["n"] for r in self._all(
+            f"SELECT followee_id AS id, COUNT(*) AS n FROM follows WHERE followee_id IN ({marks}) "
+            "GROUP BY followee_id", ids)}
+        following = {r["id"]: r["n"] for r in self._all(
+            f"SELECT follower_id AS id, COUNT(*) AS n FROM follows WHERE follower_id IN ({marks}) "
+            "GROUP BY follower_id", ids)}
+        visible = {}
+        for table in ("workouts", "posts"):
+            visible[table] = {r["id"]: r["n"] for r in self._all(
+                f"SELECT w.user_id AS id, COUNT(*) AS n FROM {table} w WHERE w.user_id IN ({marks}) "
+                f"AND {VISIBLE_SQL} GROUP BY w.user_id", args)}
+        followed = {r["followee_id"] for r in self._all(
+            f"SELECT followee_id FROM follows WHERE follower_id = :viewer AND followee_id IN ({marks})", args)} \
+            if viewer_id else set()
+        return [{
+            "id": r["id"], "username": r["username"], "display_name": r["display_name"],
+            "sport": r["sport"], "level": r["level"], "goals": r["goals"], "bio": r["bio"],
+            "created_at": r["created_at"],
+            "avatar_url": self._avatar_url(r["username"], avatars.get(r["id"], 0)),
+            "followers": followers.get(r["id"], 0),
+            "following": following.get(r["id"], 0),
+            "workouts": visible["workouts"].get(r["id"], 0),
+            "posts": visible["posts"].get(r["id"], 0),
+            "is_me": r["id"] == viewer_id,
+            "followed_by_me": r["id"] in followed,
+        } for r in rows]
 
     @locked
     def get_profile(self, username, viewer_id):
         return self._user_view(self._user_row(username), viewer_id)
 
     @locked
-    def update_profile(self, user_id, data):
-        fields = v.validate_profile(data)
-        if fields:
-            sets = ", ".join(f"{k} = :{k}" for k in fields)
-            with self.conn:
-                self.conn.execute(f"UPDATE users SET {sets} WHERE id = :id", {**fields, "id": user_id})
+    def get_my_profile(self, user_id):
         row = self._one("SELECT * FROM users WHERE id = ?", (user_id,))
         return self._user_view(row, user_id)
+
+    @locked
+    def update_profile(self, user_id, data):
+        self._update_row("users", user_id, v.validate_profile(data))
+        return self.get_my_profile(user_id)
 
     @locked
     def set_avatar(self, user_id, image):
@@ -176,13 +280,13 @@ class RepSquad:
                 "INSERT INTO user_avatars(user_id, mime, data, version) VALUES (?,?,?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, version = excluded.version",
                 (user_id, mime, data, (previous["version"] if previous else 0) + 1))
-        return self._user_view(self._one("SELECT * FROM users WHERE id = ?", (user_id,)), user_id)
+        return self.get_my_profile(user_id)
 
     @locked
     def delete_avatar(self, user_id):
         with self.conn:
             self.conn.execute("DELETE FROM user_avatars WHERE user_id = ?", (user_id,))
-        return self._user_view(self._one("SELECT * FROM users WHERE id = ?", (user_id,)), user_id)
+        return self.get_my_profile(user_id)
 
     @locked
     def get_avatar(self, username):
@@ -200,7 +304,7 @@ class RepSquad:
         rows = self._all(
             "SELECT * FROM users WHERE username LIKE :q ESCAPE '\\' OR display_name LIKE :q ESCAPE '\\' "
             "ORDER BY username LIMIT :n", {"q": like, "n": limit})
-        return [self._user_view(r, viewer_id) for r in rows]
+        return self._user_views(rows, viewer_id)
 
     # ---------- REQ-4: follows ----------
     @locked
@@ -268,11 +372,7 @@ class RepSquad:
         return views
 
     def _visible_row(self, workout_id, viewer_id):
-        """The workout row if the viewer may see it; otherwise NotFound (existence is not revealed)."""
-        row = self._one(self._BASE + " WHERE w.id = ?", (workout_id,))
-        if not row or not can_view(row["user_id"], row["visibility"], viewer_id):
-            raise NotFound("Тренування не знайдено")
-        return row
+        return self._visible(self._WORKOUT, workout_id, viewer_id)
 
     def _previous_max(self, user_id):
         rows = self._all(
@@ -314,10 +414,7 @@ class RepSquad:
         return view
 
     def _owned_row(self, workout_id, user_id):
-        row = self._visible_row(workout_id, user_id)
-        if row["user_id"] != user_id:
-            raise Forbidden("Це тренування належить іншому користувачу")
-        return row
+        return self._owned(self._WORKOUT, workout_id, user_id)
 
     @locked
     def update_workout(self, workout_id, user_id, data):
@@ -331,10 +428,7 @@ class RepSquad:
             fields["visibility"] = v.validate_visibility(data["visibility"])
         if "date" in data:
             fields["date"] = v.validate_date(data["date"], self.now().date())
-        if fields:
-            sets = ", ".join(f"{k} = :{k}" for k in fields)
-            with self.conn:
-                self.conn.execute(f"UPDATE workouts SET {sets} WHERE id = :id", {**fields, "id": workout_id})
+        self._update_row("workouts", workout_id, fields)
         return self.get_workout(workout_id, user_id)
 
     @locked
@@ -397,6 +491,13 @@ class RepSquad:
                   "EXISTS(SELECT 1 FROM post_images i WHERE i.post_id = w.id) AS has_image "
                   "FROM posts w JOIN users u ON u.id = w.user_id")
 
+    _WORKOUT = _Kind(_BASE, "likes", "comments", "workout_id", "Тренування не знайдено",
+                     "Це тренування належить іншому користувачу",
+                     "Видалити коментар може лише його автор або автор тренування")
+    _POST = _Kind(_POST_BASE, "post_likes", "post_comments", "post_id", "Допис не знайдено",
+                  "Цей допис належить іншому користувачу",
+                  "Видалити коментар може лише його автор або автор допису")
+
     def _post_views(self, rows, viewer_id):
         if not rows:
             return []
@@ -418,17 +519,10 @@ class RepSquad:
         } for r in rows]
 
     def _visible_post(self, post_id, viewer_id):
-        """The post row if the viewer may see it; otherwise NotFound (existence is not revealed)."""
-        row = self._one(self._POST_BASE + " WHERE w.id = ?", (post_id,))
-        if not row or not can_view(row["user_id"], row["visibility"], viewer_id):
-            raise NotFound("Допис не знайдено")
-        return row
+        return self._visible(self._POST, post_id, viewer_id)
 
     def _owned_post(self, post_id, user_id):
-        row = self._visible_post(post_id, user_id)
-        if row["user_id"] != user_id:
-            raise Forbidden("Цей допис належить іншому користувачу")
-        return row
+        return self._owned(self._POST, post_id, user_id)
 
     @locked
     def get_post(self, post_id, viewer_id):
@@ -439,44 +533,18 @@ class RepSquad:
 
     @locked
     def toggle_post_like(self, post_id, user_id):
-        self._visible_post(post_id, user_id)
-        with self.conn:
-            deleted = self.conn.execute("DELETE FROM post_likes WHERE user_id = ? AND post_id = ?", (user_id, post_id)).rowcount
-            if not deleted:
-                self.conn.execute("INSERT INTO post_likes(user_id, post_id) VALUES (?,?)", (user_id, post_id))
-        n = self._one("SELECT COUNT(*) AS n FROM post_likes WHERE post_id = ?", (post_id,))["n"]
-        return {"liked": not deleted, "likes": n}
+        return self._toggle_like(self._POST, post_id, user_id)
 
     def _post_comments(self, post_id, viewer_id, owner_id):
-        rows = self._all(
-            "SELECT c.id, c.user_id, c.body, c.created_at, u.username, u.display_name, "
-            "(SELECT version FROM user_avatars a WHERE a.user_id = u.id) AS avatar_v FROM post_comments c "
-            "JOIN users u ON u.id = c.user_id WHERE c.post_id = ? ORDER BY c.id", (post_id,))
-        return [{"id": r["id"], "body": r["body"], "created_at": r["created_at"],
-                 "author": {"username": r["username"], "display_name": r["display_name"],
-                            "avatar_url": self._avatar_url(r["username"], r["avatar_v"])},
-                 "can_delete": viewer_id in (r["user_id"], owner_id)} for r in rows]
+        return self._comment_list(self._POST, post_id, viewer_id, owner_id)
 
     @locked
     def add_post_comment(self, post_id, user_id, body):
-        row = self._visible_post(post_id, user_id)
-        body = v.clean_text(body, "Коментар", max_len=v.MAX_COMMENT, required=True)
-        with self.conn:
-            self.conn.execute("INSERT INTO post_comments(post_id, user_id, body, created_at) VALUES (?,?,?,?)",
-                              (post_id, user_id, body, self.now().isoformat()))
-        return self._post_comments(post_id, user_id, row["user_id"])
+        return self._add_comment(self._POST, post_id, user_id, body)
 
     @locked
     def delete_post_comment(self, comment_id, user_id):
-        c = self._one("SELECT id, user_id, post_id FROM post_comments WHERE id = ?", (comment_id,))
-        if not c:
-            raise NotFound("Коментар не знайдено")
-        row = self._visible_post(c["post_id"], user_id)
-        if user_id not in (c["user_id"], row["user_id"]):
-            raise Forbidden("Видалити коментар може лише його автор або автор допису")
-        with self.conn:
-            self.conn.execute("DELETE FROM post_comments WHERE id = ?", (comment_id,))
-        return self._post_comments(c["post_id"], user_id, row["user_id"])
+        return self._delete_comment(self._POST, comment_id, user_id)
 
     @locked
     def create_post(self, user_id, data):
@@ -497,10 +565,7 @@ class RepSquad:
             fields["body"] = v.clean_text(data["body"], "Допис", max_len=v.MAX_POST, required=not row["has_image"])
         if "visibility" in data:
             fields["visibility"] = v.validate_visibility(data["visibility"])
-        if fields:
-            sets = ", ".join(f"{k} = :{k}" for k in fields)
-            with self.conn:
-                self.conn.execute(f"UPDATE posts SET {sets} WHERE id = :id", {**fields, "id": post_id})
+        self._update_row("posts", post_id, fields)
         return self._post_views([self._visible_post(post_id, user_id)], user_id)[0]
 
     @locked
@@ -521,45 +586,18 @@ class RepSquad:
     # ---------- REQ-6: likes and comments ----------
     @locked
     def toggle_like(self, workout_id, user_id):
-        self._visible_row(workout_id, user_id)
-        with self.conn:
-            deleted = self.conn.execute("DELETE FROM likes WHERE user_id = ? AND workout_id = ?",
-                                        (user_id, workout_id)).rowcount
-            if not deleted:
-                self.conn.execute("INSERT INTO likes(user_id, workout_id) VALUES (?,?)", (user_id, workout_id))
-        n = self._one("SELECT COUNT(*) AS n FROM likes WHERE workout_id = ?", (workout_id,))["n"]
-        return {"liked": not deleted, "likes": n}
+        return self._toggle_like(self._WORKOUT, workout_id, user_id)
 
     def _comments(self, workout_id, viewer_id, owner_id):
-        rows = self._all(
-            "SELECT c.id, c.user_id, c.body, c.created_at, u.username, u.display_name, "
-            "(SELECT version FROM user_avatars a WHERE a.user_id = u.id) AS avatar_v FROM comments c "
-            "JOIN users u ON u.id = c.user_id WHERE c.workout_id = ? ORDER BY c.id", (workout_id,))
-        return [{"id": r["id"], "body": r["body"], "created_at": r["created_at"],
-                 "author": {"username": r["username"], "display_name": r["display_name"],
-                            "avatar_url": self._avatar_url(r["username"], r["avatar_v"])},
-                 "can_delete": viewer_id in (r["user_id"], owner_id)} for r in rows]
+        return self._comment_list(self._WORKOUT, workout_id, viewer_id, owner_id)
 
     @locked
     def add_comment(self, workout_id, user_id, body):
-        row = self._visible_row(workout_id, user_id)
-        body = v.clean_text(body, "Коментар", max_len=v.MAX_COMMENT, required=True)
-        with self.conn:
-            self.conn.execute("INSERT INTO comments(workout_id, user_id, body, created_at) VALUES (?,?,?,?)",
-                              (workout_id, user_id, body, self.now().isoformat()))
-        return self._comments(workout_id, user_id, row["user_id"])
+        return self._add_comment(self._WORKOUT, workout_id, user_id, body)
 
     @locked
     def delete_comment(self, comment_id, user_id):
-        c = self._one("SELECT c.id, c.user_id, c.workout_id FROM comments c WHERE c.id = ?", (comment_id,))
-        if not c:
-            raise NotFound("Коментар не знайдено")
-        row = self._visible_row(c["workout_id"], user_id)
-        if user_id not in (c["user_id"], row["user_id"]):
-            raise Forbidden("Видалити коментар може лише його автор або автор тренування")
-        with self.conn:
-            self.conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
-        return self._comments(c["workout_id"], user_id, row["user_id"])
+        return self._delete_comment(self._WORKOUT, comment_id, user_id)
 
     # ---------- REQ-9: records and progress ----------
     def _set_rows(self, user_id):
